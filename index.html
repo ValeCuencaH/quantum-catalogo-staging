@@ -1215,7 +1215,7 @@ select.form-input {
           </div>
           <div class="form-field">
             <label class="form-label">Teléfono <span class="req">*</span></label>
-            <input type="tel" class="form-input" id="fTelefono" autocomplete="tel" placeholder="55 1234 5678">
+            <input type="tel" class="form-input" id="fTelefono" autocomplete="tel" placeholder="55 1234 5678" maxlength="20">
             <span class="form-error-msg">Campo requerido</span>
           </div>
           <div class="form-field">
@@ -1685,16 +1685,18 @@ document.getElementById('searchInput').addEventListener('input', e => {
 });
 
 // ── CART ──
+const MAX_QTY_GLOBAL = 999;
 function addToCart(idx) {
   const p = PRODUCTS[idx];
   const qtyEl = document.getElementById('qty-' + idx);
-  let qty = parseInt(qtyEl.value) || 1;
-  const maxQty = p.stock_status === 'disponible' ? Math.floor(p.inventario) : 999;
+  let qty = parseInt(qtyEl.value, 10);
+  if (!Number.isFinite(qty) || qty < 1) qty = 1;
+  if (qty > MAX_QTY_GLOBAL) qty = MAX_QTY_GLOBAL;
+  const maxQty = p.stock_status === 'disponible' ? Math.floor(p.inventario) : MAX_QTY_GLOBAL;
   if (p.stock_status === 'disponible' && qty > maxQty && maxQty > 0) {
     openSplitModal(idx, qty, maxQty);
     return;
   }
-  if (qty < 1) qty = 1;
   const btnEl = document.getElementById('btn-' + idx);
 
   const existing = cart.find(i => i.sku === p.sku);
@@ -1777,8 +1779,9 @@ function removeFromCart(sku) { cart = cart.filter(i => i.sku !== sku); updateCar
 function updateQty(sku, delta) {
   const item = cart.find(i => i.sku === sku);
   if (!item) return;
-  const newQty = item.qty + delta;
-  if (newQty < 1) return;
+  let newQty = item.qty + delta;
+  if (!Number.isFinite(newQty) || newQty < 1) return;
+  if (newQty > MAX_QTY_GLOBAL) newQty = MAX_QTY_GLOBAL;
   if (item.stock_status === 'disponible' && newQty > item.inventario) {
     alert('Máximo disponible en inventario: ' + item.inventario);
     return;
@@ -2283,11 +2286,13 @@ function setupAutoCase() {
     });
   }
 
-  // Phone → digits + spaces/dashes allowed
+  // Phone → digits + spaces/dashes/+()/ permitidos, max 20 chars
   const phoneEl = document.getElementById('fTelefono');
   if (phoneEl) {
     phoneEl.addEventListener('input', () => {
-      phoneEl.value = phoneEl.value.replace(/[^\d\s\-+()]/g, '');
+      let v = phoneEl.value.replace(/[^\d\s\-+()]/g, '');
+      if (v.length > 20) v = v.slice(0, 20);
+      if (v !== phoneEl.value) phoneEl.value = v;
     });
   }
 
@@ -2592,8 +2597,9 @@ function buildOrderPayload(d) {
       referencias: d.referencias,
     },
     items: cart.map(i => ({
-      sku: i.sku,
-      nombre: i.nombre,
+      // Quitar sufijo "__PRE" del split (es interno del catálogo, no existe en Odoo)
+      sku: i.sku.replace(/__PRE$/, ''),
+      nombre: i.nombre.replace(/\s*\(Preorden\)$/, ''),
       marca: i.marca || '',
       qty: i.qty,
       p_sin_iva: i.p_sin_iva,
@@ -2638,13 +2644,19 @@ async function sendByEmail(d) {
     btn.style.opacity = '';
     btn.style.cursor = '';
     txt.textContent = originalText;
-    const fallback = confirm(
-      'No pudimos enviar tu pedido por correo en este momento (' + (err.message || 'error de red') + ').\n\n' +
-      '¿Quieres enviarlo por WhatsApp?'
-    );
-    if (fallback) {
-      sendByWhatsApp(d);
-      closeForm();
+    const errMsg = err.message || 'error de red';
+    if (ORDERS_ENV_OVERRIDE === 'staging') {
+      // En staging no hay WhatsApp como fallback — mensaje claro al tester
+      alert('No se pudo enviar el pedido (' + errMsg + ').\n\nPor favor avisa a Hrvoje o Alexander para revisar el detalle.');
+    } else {
+      const fallback = confirm(
+        'No pudimos enviar tu pedido por correo en este momento (' + errMsg + ').\n\n' +
+        '¿Quieres enviarlo por WhatsApp?'
+      );
+      if (fallback) {
+        sendByWhatsApp(d);
+        closeForm();
+      }
     }
   }
 }
